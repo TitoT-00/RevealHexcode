@@ -12,13 +12,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Camera
@@ -40,6 +44,11 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.ttdeveloper.hexcode.ui.theme.RevealHexcodeTheme
 import android.Manifest
 import android.annotation.SuppressLint
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.ui.geometry.Offset
@@ -47,9 +56,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.graphics.scale
+import androidx.lifecycle.lifecycleScope
+import com.ttdeveloper.hexcode.data.PreferencesManager
+import com.ttdeveloper.hexcode.ui.WelcomeScreen
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
+    private val preferencesManager by lazy { PreferencesManager(applicationContext) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -59,7 +74,40 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    HexcodeRevealerApp()
+                    var showWelcome by remember { mutableStateOf(true) }
+                    var hasCheckedWelcome by remember { mutableStateOf(false) }
+
+                    LaunchedEffect(Unit) {
+                        preferencesManager.hasSeenWelcome.collect { hasSeenWelcome ->
+                            showWelcome = !hasSeenWelcome
+                            hasCheckedWelcome = true
+                        }
+                    }
+
+                    if (hasCheckedWelcome) {
+                        AnimatedVisibility(
+                            visible = showWelcome,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            WelcomeScreen(
+                                onGetStarted = {
+                                    showWelcome = false
+                                    lifecycleScope.launch {
+                                        preferencesManager.setHasSeenWelcome()
+                                    }
+                                }
+                            )
+                        }
+
+                        AnimatedVisibility(
+                            visible = !showWelcome,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            HexcodeRevealerApp()
+                        }
+                    }
                 }
             }
         }
@@ -98,227 +146,240 @@ fun HexcodeRevealerApp() {
         uri?.let {
             selectedImageUri = it
             val source = ImageDecoder.createSource(context.contentResolver, it)
-            val originalBitmap = ImageDecoder.decodeBitmap(source)
-            selectedBitmap = originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
-            isCameraMode = false
+            val originalBitmap = ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+            selectedBitmap = originalBitmap
         }
     }
 
-    LaunchedEffect(Unit) {
-        permissionsState.launchMultiplePermissionRequest()
-    }
-
-    Scaffold(
-        topBar = {
-            LargeTopAppBar(
-                title = { 
-                    Column {
-                        Text(
-                            "Hexcode Revealer",
-                            style = MaterialTheme.typography.headlineMedium
-                        )
-                        Text(
-                            if (isCameraMode) "Camera Mode" else "Gallery Mode",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.largeTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                ),
-                modifier = Modifier.shadow(8.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Mode Toggle
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp)
+                .shadow(4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
             )
-        },
-        bottomBar = {
-            Column(modifier = Modifier.navigationBarsPadding()) {
-                // Color info card
-                currentHexcode?.let { hexcode ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.medium,
-                        tonalElevation = 4.dp
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    modifier = Modifier.size(40.dp),
-                                    color = Color(android.graphics.Color.parseColor(hexcode)),
-                                    shape = MaterialTheme.shapes.small,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                                ) {}
-                                Text(
-                                    text = hexcode,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            FilledTonalIconButton(
-                                onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = ClipData.newPlainText("Color Hexcode", hexcode)
-                                    clipboard.setPrimaryClip(clip)
-                                    Toast.makeText(context, "Hexcode copied to clipboard", Toast.LENGTH_SHORT).show()
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.ContentCopy,
-                                    contentDescription = "Copy hexcode",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                ElevatedButton(
+                    onClick = { isCameraMode = true },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.elevatedButtonColors(
+                        containerColor = if (isCameraMode) 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.surface
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Camera,
+                        contentDescription = "Camera",
+                        tint = if (isCameraMode) 
+                            MaterialTheme.colorScheme.onPrimary 
+                        else 
+                            MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Camera",
+                        color = if (isCameraMode) 
+                            MaterialTheme.colorScheme.onPrimary 
+                        else 
+                            MaterialTheme.colorScheme.primary
+                    )
                 }
                 
-                // Navigation bar
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 8.dp
-                ) {
-                    NavigationBarItem(
-                        selected = isCameraMode,
-                        onClick = { isCameraMode = true },
-                        icon = {
-                            Icon(
-                                Icons.Default.Camera,
-                                contentDescription = "Camera"
-                            )
-                        },
-                        label = { Text("Camera") }
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                ElevatedButton(
+                    onClick = { 
+                        isCameraMode = false
+                        galleryLauncher.launch("image/*")
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.elevatedButtonColors(
+                        containerColor = if (!isCameraMode) 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.surface
                     )
-                    NavigationBarItem(
-                        selected = !isCameraMode,
-                        onClick = { galleryLauncher.launch("image/*") },
-                        icon = {
-                            Icon(
-                                Icons.Default.PhotoLibrary,
-                                contentDescription = "Gallery"
-                            )
-                        },
-                        label = { Text("Gallery") }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoLibrary,
+                        contentDescription = "Gallery",
+                        tint = if (!isCameraMode) 
+                            MaterialTheme.colorScheme.onPrimary 
+                        else 
+                            MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Gallery",
+                        color = if (!isCameraMode) 
+                            MaterialTheme.colorScheme.onPrimary 
+                        else 
+                            MaterialTheme.colorScheme.primary
                     )
                 }
             }
         }
-    ) { paddingValues ->
-        Column(
+
+        // Main Content
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .weight(1f)
+                .fillMaxWidth()
         ) {
             if (permissionsState.allPermissionsGranted) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    if (isCameraMode) {
-                        CameraPreview(
-                            onColorPicked = { hexcode ->
-                                currentHexcode = hexcode
-                            }
+                if (isCameraMode) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp)
+                            .shadow(8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
                         )
-                    } else {
-                        selectedImageUri?.let { uri ->
-                            AsyncImage(
-                                model = uri,
-                                contentDescription = "Selected image",
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .onSizeChanged { size ->
-                                        imageWidth = size.width
-                                        imageHeight = size.height
-                                    }
-                                    .pointerInput(Unit) {
-                                        detectTapGestures { offset ->
-                                            selectedBitmap?.let { bitmap ->
-                                                val scaledBitmap = bitmap.scale(
-                                                    imageWidth,
-                                                    imageHeight,
-                                                    true
-                                                )
-                                                val x = offset.x.roundToInt()
-                                                val y = offset.y.roundToInt()
-                                                if (x in 0 until scaledBitmap.width && y in 0 until scaledBitmap.height) {
-                                                    val pixel = scaledBitmap.getPixel(x, y)
-                                                    currentHexcode = String.format("#%06X", 0xFFFFFF and pixel)
+                    ) {
+                        CameraPreview { hexcode ->
+                            currentHexcode = hexcode
+                        }
+                    }
+                } else {
+                    selectedImageUri?.let { uri ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp)
+                                .shadow(8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                AsyncImage(
+                                    model = uri,
+                                    contentDescription = "Selected image",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures { offset ->
+                                                selectedBitmap?.let { bitmap ->
+                                                    val scaledX = (offset.x * (bitmap.width.toFloat() / size.width)).roundToInt()
+                                                    val scaledY = (offset.y * (bitmap.height.toFloat() / size.height)).roundToInt()
+                                                    
+                                                    if (scaledX in 0 until bitmap.width && scaledY in 0 until bitmap.height) {
+                                                        val pixel = bitmap.getPixel(scaledX, scaledY)
+                                                        currentHexcode = String.format("#%06X", 0xFFFFFF and pixel)
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                            )
-                        } ?: run {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.PhotoLibrary,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(64.dp),
-                                        tint = MaterialTheme.colorScheme.secondary
-                                    )
-                                    Text(
-                                        "Tap the gallery icon to select an image",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                }
+                                )
                             }
                         }
                     }
                 }
             } else {
-                Box(
+                Column(
                     modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.padding(32.dp)
+                    Text(
+                        "Camera and Storage permissions are required",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    Button(
+                        onClick = { permissionsState.launchMultiplePermissionRequest() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
                     ) {
-                        Icon(
-                            Icons.Default.Camera,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                        Text(
-                            "Camera and Storage Permissions Required",
-                            style = MaterialTheme.typography.titleLarge,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            "Please grant the required permissions to use this app",
-                            style = MaterialTheme.typography.bodyLarge,
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                        Button(
-                            onClick = { permissionsState.launchMultiplePermissionRequest() },
-                            modifier = Modifier.padding(top = 8.dp)
+                        Text("Grant Permissions")
+                    }
+                }
+            }
+        }
+
+        // Hexcode Display
+        AnimatedVisibility(
+            visible = currentHexcode != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp)
+                    .shadow(4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    currentHexcode?.let { hexcode ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            Text("Grant Permissions")
+                            // Color preview
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .shadow(4.dp, RoundedCornerShape(8.dp))
+                                    .background(
+                                        Color(android.graphics.Color.parseColor(hexcode)),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.12f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                            )
+                            // Hexcode text
+                            Text(
+                                text = hexcode,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("Hexcode", hexcode)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, "Hexcode copied!", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy hexcode",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
