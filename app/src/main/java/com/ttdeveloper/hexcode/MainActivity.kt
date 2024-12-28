@@ -2,20 +2,23 @@ package com.ttdeveloper.hexcode
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
@@ -23,9 +26,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Camera
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,7 +55,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -61,6 +65,11 @@ import com.ttdeveloper.hexcode.data.PreferencesManager
 import com.ttdeveloper.hexcode.ui.WelcomeScreen
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private val preferencesManager by lazy { PreferencesManager(applicationContext) }
@@ -392,12 +401,21 @@ fun HexcodeRevealerApp() {
 fun CameraPreview(onColorPicked: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val previewView = remember { PreviewView(context) }
+    var size by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
     var lastTapTime by remember { mutableStateOf(0L) }
     
+    val previewView = remember { PreviewView(context) }
+    val imageCapture = remember { ImageCapture.Builder().build() }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraExecutor.shutdown()
+        }
+    }
+    
     LaunchedEffect(previewView) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        val cameraProvider = cameraProviderFuture.get()
+        val cameraProvider = ProcessCameraProvider.getInstance(context).get()
         
         val preview = Preview.Builder().build().also {
             it.setSurfaceProvider(previewView.surfaceProvider)
@@ -408,33 +426,93 @@ fun CameraPreview(onColorPicked: (String) -> Unit) {
             cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 CameraSelector.DEFAULT_BACK_CAMERA,
-                preview
+                preview,
+                imageCapture
             )
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
     
-    AndroidView(
-        factory = { previewView },
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastTapTime > 500) { // Debounce taps
-                        lastTapTime = currentTime
-                        val bitmap = previewView.bitmap
-                        bitmap?.let {
-                            val x = (offset.x * (it.width.toFloat() / size.width)).roundToInt()
-                            val y = (offset.y * (it.height.toFloat() / size.height)).roundToInt()
-                            if (x in 0 until it.width && y in 0 until it.height) {
-                                val pixel = it.getPixel(x, y)
-                                onColorPicked(String.format("#%06X", 0xFFFFFF and pixel))
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { previewView },
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastTapTime > 500) { // Debounce taps
+                            lastTapTime = currentTime
+                            val bitmap = previewView.bitmap
+                            bitmap?.let {
+                                val x = (offset.x * (it.width.toFloat() / size.width)).roundToInt()
+                                val y = (offset.y * (it.height.toFloat() / size.height)).roundToInt()
+                                if (x in 0 until it.width && y in 0 until it.height) {
+                                    val pixel = it.getPixel(x, y)
+                                    onColorPicked(String.format("#%06X", 0xFFFFFF and pixel))
+                                }
                             }
                         }
                     }
                 }
-            }
-    )
+                .onSizeChanged {
+                    size = androidx.compose.ui.geometry.Size(it.width.toFloat(), it.height.toFloat())
+                }
+        )
+        
+        // Capture button
+        IconButton(
+            onClick = {
+                val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
+                    .format(System.currentTimeMillis())
+                
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.jpg")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/HexcodeRevealer")
+                }
+
+                val outputOptions = ImageCapture.OutputFileOptions.Builder(
+                    context.contentResolver,
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    contentValues
+                ).build()
+
+                imageCapture.takePicture(
+                    outputOptions,
+                    ContextCompat.getMainExecutor(context),
+                    object : ImageCapture.OnImageSavedCallback {
+                        override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                            Toast.makeText(
+                                context,
+                                "Photo saved to gallery",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            Toast.makeText(
+                                context,
+                                "Failed to save photo: ${exception.message}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                )
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp)
+                .size(72.dp)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), CircleShape)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Camera,
+                contentDescription = "Take photo",
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
 }

@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "RevealHexcode"
+rootProject.name = "HexcodeRevealer"
 include(":app")
